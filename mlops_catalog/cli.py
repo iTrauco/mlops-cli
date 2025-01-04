@@ -33,6 +33,22 @@ def register_model(
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+    
+
+
+@model_app.command("list")
+def list_models():
+    """List all registered models"""
+    try:
+        from mlops_catalog.core.registry import Registry
+        registry = Registry()
+        models = registry.list_models()
+        console.print("\n[bold]Registered Models:[/bold]")
+        for model in models:
+            console.print(f"• Name: {model.name}, Version: {model.version}, Framework: {model.framework}")
+    except Exception as e:
+        console.print(f"[red]Error listing models: {e}[/red]")
+        raise typer.Exit(1)
 
 if __name__ == "__main__":
     app()
