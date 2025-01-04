@@ -1,0 +1,243 @@
+=== mlops_catalog/vertex/__init__.py ===
+"""
+Vertex AI Integration Module for MLOps Catalog 🌩️
+"""
+
+from .config import VertexAIConfig, get_default_config
+
+__all__ = ["VertexAIConfig", "get_default_config"]
+
+=== mlops_catalog/vertex/config.py ===
+"""
+Vertex AI Configuration Module 🔧
+This module handles configuration settings and environment setup for Vertex AI integration.
+Includes default values and configuration validation.
+"""
+from typing import Optional, Dict, Any
+from pathlib import Path
+import os
+import yaml
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, validator
+from dotenv import load_dotenv
+
+class VertexAIConfig(BaseSettings):
+    """
+    Vertex AI Configuration Settings ⚙️
+    
+    Attributes:
+        project_id (str): GCP Project ID
+        region (str): GCP Region for Vertex AI operations
+        staging_bucket (str): GCS bucket for staging Vertex AI assets
+        default_container_registry (str): Default container registry path
+    """
+    # Vertex AI specific settings
+    project_id: Optional[str] = Field(None, description="GCP Project ID")
+    region: str = Field('us-central1', description="GCP Region for Vertex AI operations")
+    staging_bucket: Optional[str] = Field(None, description="GCS bucket for staging Vertex AI assets")
+    default_container_registry: str = Field('gcr.io', description="Default container registry path")
+    
+    # MLOps general settings
+    mlops_base_path: str = Field('~/.mlops', description="Base path for MLOps resources")
+    mlops_db_url: Optional[str] = Field(None, description="MLOps database URL")
+    mlops_log_level: str = Field('INFO', description="Logging level for MLOps")
+
+    model_config = SettingsConfigDict(
+        env_prefix="VERTEX_",
+        extra='allow'
+    )
+
+    @validator('project_id', pre=True, always=True)
+    def validate_project_id(cls, v):
+        """Validate project ID from multiple sources"""
+        # First check direct environment variables (highest priority)
+        project_id = os.getenv('VERTEX_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT')
+        return project_id or v
+
+    @validator('mlops_base_path', pre=True, always=True)
+    def validate_mlops_base_path(cls, v):
+        """Validate and expand MLOPS_BASE_PATH"""
+        base_path = os.getenv('MLOPS_BASE_PATH', v)
+        return os.path.abspath(os.path.expanduser(base_path))
+
+    def get_staging_bucket(self) -> str:
+        """Get or generate staging bucket path 🪣"""
+        if self.staging_bucket:
+            return self.staging_bucket
+        return f"gs://{self.project_id}-vertex-staging"
+    
+    def validate_config(self) -> None:
+        """Validate required configuration values are set 🔍"""
+        if not self.project_id:
+            raise ValueError("Project ID must be set via VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT")
+        if not self.region:
+            raise ValueError("Region must be set via VERTEX_REGION or defaults to us-central1")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(self.mlops_base_path, exist_ok=True)
+
+    @classmethod
+    def from_yaml(cls, config_path: Path) -> "VertexAIConfig":
+        """
+        Load configuration from YAML file 📄
+        
+        Args:
+            config_path (Path): Path to YAML configuration file
+            
+        Returns:
+            VertexAIConfig: Configuration instance
+        """
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+            
+        with open(config_path) as f:
+            config_data = yaml.safe_load(f)
+        return cls(**config_data)
+
+def get_default_config() -> VertexAIConfig:
+    """
+    Get default Vertex AI configuration 🎯
+    
+    Attempts to load from environment variables first, then falls back to defaults.
+    Also validates the configuration.
+    
+    Returns:
+        VertexAIConfig: Default configuration instance
+        
+    Raises:
+        ValueError: If required configuration values are missing
+    """
+    # Look for .env file in MLOPS_BASE_PATH if set
+    base_path = os.getenv('MLOPS_BASE_PATH', '~/.mlops')
+    env_path = os.path.expanduser(os.path.join(base_path, '.env'))
+    
+    # Only load .env if it exists and environment variables aren't already set
+    if os.path.exists(env_path) and not os.getenv('VERTEX_PROJECT_ID'):
+        load_dotenv(env_path)
+    
+    config = VertexAIConfig()
+    config.validate_config()
+    return config
+=== tests/unit/test_vertex_config.py ===
+"""
+Test Vertex AI Configuration Module 🧪
+Tests configuration loading, validation, and environment variable handling
+"""
+import os
+import pytest
+import yaml
+from pathlib import Path
+from mlops_catalog.vertex import VertexAIConfig, get_default_config
+
+@pytest.fixture
+def setup_env():
+    """Setup test environment variables"""
+    # Save original environment
+    original_env = {
+        'MLOPS_BASE_PATH': os.getenv('MLOPS_BASE_PATH'),
+        'VERTEX_PROJECT_ID': os.getenv('VERTEX_PROJECT_ID'),
+        'GOOGLE_CLOUD_PROJECT': os.getenv('GOOGLE_CLOUD_PROJECT'),
+        'VERTEX_REGION': os.getenv('VERTEX_REGION'),
+        'VERTEX_STAGING_BUCKET': os.getenv('VERTEX_STAGING_BUCKET'),
+        'MLOPS_DB_URL': os.getenv('MLOPS_DB_URL'),
+        'MLOPS_LOG_LEVEL': os.getenv('MLOPS_LOG_LEVEL')
+    }
+    
+    # Set test environment
+    os.environ['MLOPS_BASE_PATH'] = '/tmp/mlops_test'
+    os.environ['VERTEX_PROJECT_ID'] = 'trauco-streaming-dev'
+    os.environ['VERTEX_REGION'] = 'us-central1'
+    os.environ['VERTEX_STAGING_BUCKET'] = 'gs://trauco-streaming-dev-vertex-staging'
+    os.environ['MLOPS_DB_URL'] = 'sqlite:////tmp/mlops_test/registry.db'
+    os.environ['MLOPS_LOG_LEVEL'] = 'INFO'
+    
+    yield
+    
+    # Restore original environment
+    for key, value in original_env.items():
+        if value is not None:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)
+
+def test_default_config(setup_env):
+    """Test default configuration loading"""
+    config = get_default_config()
+    assert config.project_id == 'trauco-streaming-dev'
+    assert config.region == 'us-central1'
+    assert config.staging_bucket == 'gs://trauco-streaming-dev-vertex-staging'
+    assert config.default_container_registry == 'gcr.io'
+    assert config.mlops_base_path == os.path.abspath(os.path.expanduser('/tmp/mlops_test'))
+    assert config.mlops_log_level == 'INFO'
+
+def test_missing_project_id(setup_env):
+    """Test configuration validation with missing project ID"""
+    os.environ.pop('VERTEX_PROJECT_ID', None)
+    os.environ.pop('GOOGLE_CLOUD_PROJECT', None)
+    os.environ.pop('VERTEX_REGION', None)  # Also remove region to trigger validation
+    
+    with pytest.raises(ValueError, match="Project ID must be set"):
+        get_default_config()
+
+def test_staging_bucket_generation(setup_env):
+    """Test staging bucket auto-generation"""
+    # Remove explicit staging bucket to test auto-generation
+    os.environ.pop('VERTEX_STAGING_BUCKET', None)
+    config = get_default_config()
+    assert config.get_staging_bucket() == 'gs://trauco-streaming-dev-vertex-staging'
+
+def test_yaml_config(setup_env, tmp_path):
+    """Test loading configuration from YAML"""
+    config_path = tmp_path / "vertex_config.yaml"
+    config_data = {
+        "project_id": "test-project",
+        "region": "us-west1",
+        "staging_bucket": "gs://test-bucket",
+        "default_container_registry": "gcr.io/test"
+    }
+    
+    with open(config_path, 'w') as f:
+        yaml.dump(config_data, f)
+    
+    config = VertexAIConfig.from_yaml(config_path)
+    assert config.project_id == "test-project"
+    assert config.region == "us-west1"
+    assert config.staging_bucket == "gs://test-bucket"
+    assert config.default_container_registry == "gcr.io/test"
+
+def test_yaml_config_missing_file(setup_env):
+    """Test loading configuration from non-existent YAML file"""
+    with pytest.raises(FileNotFoundError):
+        VertexAIConfig.from_yaml(Path("nonexistent.yaml"))
+
+def test_mlops_path_creation(setup_env, tmp_path):
+    """Test MLOPS_BASE_PATH directory creation"""
+    test_path = tmp_path / "mlops_test"
+    os.environ['MLOPS_BASE_PATH'] = str(test_path)
+    config = get_default_config()
+    # Force directory creation through validate_config
+    config.validate_config()
+    assert test_path.exists()
+    assert test_path.is_dir()
+
+def test_environment_override(setup_env):
+    """Test environment variable override of defaults"""
+    os.environ['VERTEX_REGION'] = 'europe-west1'
+    os.environ['VERTEX_CONTAINER_REGISTRY'] = 'eu.gcr.io'
+    config = get_default_config()
+    assert config.region == 'europe-west1'
+    assert config.default_container_registry == 'eu.gcr.io'
+
+def test_config_validation(setup_env):
+    """Test configuration validation logic"""
+    os.environ.pop('VERTEX_REGION', None)
+    config = get_default_config()
+    assert config.region == 'us-central1'  # Should use default value
+    config.validate_config()  # Should not raise any errors
+
+def test_staging_bucket_precedence(setup_env):
+    """Test staging bucket explicit setting takes precedence"""
+    explicit_bucket = "gs://explicit-bucket"
+    os.environ['VERTEX_STAGING_BUCKET'] = explicit_bucket
+    config = get_default_config()
+    assert config.get_staging_bucket() == explicit_bucket
